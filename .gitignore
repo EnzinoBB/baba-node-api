@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.local
 .env.smoke
+.env.test.local
 *.smoke.log
 *.egg-info/
 gen-py/

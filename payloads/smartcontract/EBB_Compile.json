@@ -1,0 +1,16 @@
+{
+  "endpoint": "/api/SmartContract/Compile",
+  "method": "POST",
+  "description": "Reference payload for compiling the EBB token smart contract. EBB extends SmartContract and implements BasicStandard (Credits canonical token interface) — burn() and setFrozen() come from the interface. Total supply: 1,000,000 EBB; decimals: 18.",
+  "request": {
+    "sourceCode": "import com.credits.scapi.v0.SmartContract;\nimport com.credits.scapi.v0.BasicStandard;\n\nimport java.math.BigDecimal;\nimport java.util.HashMap;\nimport java.util.Map;\n\npublic class EBB extends SmartContract implements BasicStandard {\n    private final String owner;\n    private final String name = \"EBB\";\n    private final String symbol = \"EBB\";\n    private final int decimals = 18;\n    private BigDecimal totalSupplyValue;\n    private boolean frozen = false;\n    private Map<String, BigDecimal> balances = new HashMap<>();\n    private Map<String, Map<String, BigDecimal>> allowances = new HashMap<>();\n\n    public EBB() { super(); owner = initiator; totalSupplyValue = new BigDecimal(\"1000000\"); balances.put(owner, totalSupplyValue); }\n    public String getName() { return name; }\n    public String getSymbol() { return symbol; }\n    public int getDecimal() { return decimals; }\n    public String totalSupply() { return totalSupplyValue.toString(); }\n    public String balanceOf(String a) { BigDecimal b = balances.get(a); return (b==null?BigDecimal.ZERO:b).toString(); }\n    public boolean transfer(String to, String amount) { /* ... */ return true; }\n    public boolean burn(String amount) { /* ... */ return true; }\n    public boolean setFrozen(boolean f) { /* only owner */ return f; }\n}\n"
+  },
+  "response_success_shape": {
+    "success": true,
+    "byteCodeObjects": [
+      {"name": "EBB", "byteCode": "<base64 bytecode>"}
+    ],
+    "tokenStandard": "non-zero (signals BasicStandard implementation)"
+  },
+  "notes": "The actual deployed source lives in /contracts/EBB.java — this payload is an illustrative reference for the Compile endpoint. The first import MUST remain `com.credits.scapi.v0.SmartContract;` for the executor compilation to succeed."
+}
