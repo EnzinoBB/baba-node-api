@@ -31,8 +31,7 @@ THIS_DIR = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from mcp.types import CallToolRequest, CallToolRequestParams
-from baba_mcp.server import load_config, build_server
+from scripts._ebb_mcp_client import open_session, call
 from scripts._ebb_signing import sign_packaged, generate_keypair
 
 ENV_TEST_PATH = REPO_ROOT / ".env.test.local"
@@ -83,16 +82,6 @@ def load_or_create_test_wallets() -> dict[str, dict[str, str]]:
     for label, w in wallets.items():
         print(f"  {label}.pub = {w['pub']}")
     return wallets
-
-
-async def call(server, name: str, args: dict) -> dict:
-    handler = server.request_handlers[CallToolRequest]
-    req = CallToolRequest(
-        method="tools/call",
-        params=CallToolRequestParams(name=name, arguments=args),
-    )
-    res = await handler(req)
-    return json.loads(res.root.content[0].text)
 
 
 async def cs_transfer(server, from_pub: str, from_priv: str, to_pub: str, amount: str) -> dict:
@@ -156,91 +145,89 @@ async def main() -> None:
     wallets = load_or_create_test_wallets()
     A, B, C = wallets["A"], wallets["B"], wallets["C"]
 
-    cfg = load_config()
-    server = build_server(cfg)
+    async with open_session() as s:
+        # ---- Step 1: fund A/B/C with 0.1 CS each
+        for label, w in [("A", A), ("B", B), ("C", C)]:
+            print(f"[fund] owner -> {label} 0.1 CS ...")
+            r = await cs_transfer(s, owner_pub, owner_priv, w["pub"], "0.1")
+            ok = r.get("success")
+            print(f"  ok={ok} txId={r.get('transactionId')} err={r.get('messageError')}")
+            if not ok:
+                sys.exit(f"fund {label} failed: {r}")
 
-    # ---- Step 1: fund A/B/C with 0.1 CS each
-    for label, w in [("A", A), ("B", B), ("C", C)]:
-        print(f"[fund] owner -> {label} 0.1 CS ...")
-        r = await cs_transfer(server, owner_pub, owner_priv, w["pub"], "0.1")
-        ok = r.get("success")
-        print(f"  ok={ok} txId={r.get('transactionId')} err={r.get('messageError')}")
-        if not ok:
-            sys.exit(f"fund {label} failed: {r}")
+        print("[wait] settling fund txs ...")
+        await call(s, "monitor_wait_for_block", {"timeoutMs": 30000})
 
-    print("[wait] settling fund txs ...")
-    await call(server, "monitor_wait_for_block", {"timeoutMs": 30000})
+        # ---- Step 2: distribute 100 EBB to each of A/B/C
+        for label, w in [("A", A), ("B", B), ("C", C)]:
+            print(f"[distribute] owner -> {label} 100 EBB ...")
+            r = await sc_execute(s, owner_pub, owner_priv, contract,
+                                 "transfer", [{"v_string": w["pub"]}, {"v_string": "100"}])
+            print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
+            if not r.get("success"):
+                sys.exit(f"distribute to {label} failed: {r}")
+        await wait_tx(s, contract)
 
-    # ---- Step 2: distribute 100 EBB to each of A/B/C
-    for label, w in [("A", A), ("B", B), ("C", C)]:
-        print(f"[distribute] owner -> {label} 100 EBB ...")
-        r = await sc_execute(server, owner_pub, owner_priv, contract,
-                             "transfer", [{"v_string": w["pub"]}, {"v_string": "100"}])
+        # ---- Step 3: A transfers 10 EBB to B
+        print("[user-transfer] A -> B 10 EBB ...")
+        r = await sc_execute(s, A["pub"], A["priv"], contract,
+                             "transfer", [{"v_string": B["pub"]}, {"v_string": "10"}])
         print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
         if not r.get("success"):
-            sys.exit(f"distribute to {label} failed: {r}")
-    await wait_tx(server, contract)
+            sys.exit(f"A->B transfer failed: {r}")
+        await wait_tx(s, contract)
 
-    # ---- Step 3: A transfers 10 EBB to B
-    print("[user-transfer] A -> B 10 EBB ...")
-    r = await sc_execute(server, A["pub"], A["priv"], contract,
-                         "transfer", [{"v_string": B["pub"]}, {"v_string": "10"}])
-    print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
-    if not r.get("success"):
-        sys.exit(f"A->B transfer failed: {r}")
-    await wait_tx(server, contract)
+        # ---- Step 4: A burns 5 EBB
+        print("[burn] A burns 5 EBB ...")
+        r = await sc_execute(s, A["pub"], A["priv"], contract,
+                             "burn", [{"v_string": "5"}])
+        print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
+        if not r.get("success"):
+            sys.exit(f"burn failed: {r}")
+        await wait_tx(s, contract)
 
-    # ---- Step 4: A burns 5 EBB
-    print("[burn] A burns 5 EBB ...")
-    r = await sc_execute(server, A["pub"], A["priv"], contract,
-                         "burn", [{"v_string": "5"}])
-    print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
-    if not r.get("success"):
-        sys.exit(f"burn failed: {r}")
-    await wait_tx(server, contract)
+        # ---- Step 5: pause / unpause
+        print("[pause] owner setFrozen(true) ...")
+        r = await sc_execute(s, owner_pub, owner_priv, contract,
+                             "setFrozen", [{"v_bool": True}])
+        print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
+        await wait_tx(s, contract)
 
-    # ---- Step 5: pause / unpause
-    print("[pause] owner setFrozen(true) ...")
-    r = await sc_execute(server, owner_pub, owner_priv, contract,
-                         "setFrozen", [{"v_bool": True}])
-    print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
-    await wait_tx(server, contract)
+        print("[pause-test] A -> C 1 EBB during pause (expected to revert) ...")
+        r = await sc_execute(s, A["pub"], A["priv"], contract,
+                             "transfer", [{"v_string": C["pub"]}, {"v_string": "1"}])
+        print(f"  submitted ok={r.get('success')} txId={r.get('transactionId')}")
+        res = await wait_tx(s, contract, r.get("transactionId"))
+        print(f"  result={res.get('success')} err={res.get('messageError')}")
+        if res.get("success"):
+            print("  WARNING: pause did not block transfer (expected revert)")
 
-    print("[pause-test] A -> C 1 EBB during pause (expected to revert) ...")
-    r = await sc_execute(server, A["pub"], A["priv"], contract,
-                         "transfer", [{"v_string": C["pub"]}, {"v_string": "1"}])
-    print(f"  submitted ok={r.get('success')} txId={r.get('transactionId')}")
-    res = await wait_tx(server, contract, r.get("transactionId"))
-    print(f"  result={res.get('success')} err={res.get('messageError')}")
-    if res.get("success"):
-        print("  WARNING: pause did not block transfer (expected revert)")
+        print("[pause] owner setFrozen(false) ...")
+        r = await sc_execute(s, owner_pub, owner_priv, contract,
+                             "setFrozen", [{"v_bool": False}])
+        print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
+        await wait_tx(s, contract)
 
-    print("[pause] owner setFrozen(false) ...")
-    r = await sc_execute(server, owner_pub, owner_priv, contract,
-                         "setFrozen", [{"v_bool": False}])
-    print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
-    await wait_tx(server, contract)
+        print("[post-pause] A -> C 1 EBB (should succeed) ...")
+        r = await sc_execute(s, A["pub"], A["priv"], contract,
+                             "transfer", [{"v_string": C["pub"]}, {"v_string": "1"}])
+        print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
+        await wait_tx(s, contract, r.get("transactionId"))
 
-    print("[post-pause] A -> C 1 EBB (should succeed) ...")
-    r = await sc_execute(server, A["pub"], A["priv"], contract,
-                         "transfer", [{"v_string": C["pub"]}, {"v_string": "1"}])
-    print(f"  ok={r.get('success')} txId={r.get('transactionId')}")
-    await wait_tx(server, contract, r.get("transactionId"))
+        # ---- Step 6: read state + holders
+        print("[state] smartcontract_state(EBB) ...")
+        state = await call(s, "smartcontract_state", {"address": contract})
+        print(json.dumps(state, indent=2))
 
-    # ---- Step 6: read state + holders
-    print("[state] smartcontract_state(EBB) ...")
-    state = await call(server, "smartcontract_state", {"address": contract})
-    print(json.dumps(state, indent=2))
+        print("[holders] tokens_holders_get(EBB) ...")
+        holders = await call(s, "tokens_holders_get",
+                            {"token": contract, "offset": 0, "limit": 20,
+                             "order": 0, "desc": True})
+        print(json.dumps(holders, indent=2))
 
-    print("[holders] tokens_holders_get(EBB) ...")
-    holders = await call(server, "tokens_holders_get",
-                        {"token": contract, "offset": 0, "limit": 20,
-                         "order": 0, "desc": True})
-    print(json.dumps(holders, indent=2))
-
-    print("[tokens_info] tokens_info(EBB) ...")
-    tinfo = await call(server, "tokens_info", {"token": contract})
-    print(json.dumps(tinfo, indent=2))
+        print("[tokens_info] tokens_info(EBB) ...")
+        tinfo = await call(s, "tokens_info", {"token": contract})
+        print(json.dumps(tinfo, indent=2))
 
 
 if __name__ == "__main__":
