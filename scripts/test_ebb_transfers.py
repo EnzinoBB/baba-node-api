@@ -107,7 +107,7 @@ async def sc_execute(server, caller_pub: str, caller_priv: str, contract: str,
         "ReceiverPublicKey": contract,
         "method": method,
         "params": params,
-        "feeAsString": "0",
+        "feeAsString": "0.5",
         "UserData": "",
     })
     if not pack.get("success"):
@@ -123,7 +123,7 @@ async def sc_execute(server, caller_pub: str, caller_priv: str, contract: str,
         "params": params,
         "TransactionSignature": sig,
         "transactionInnerId": inner_id,
-        "feeAsString": "0",
+        "feeAsString": "0.5",
         "UserData": "",
     })
     return exe

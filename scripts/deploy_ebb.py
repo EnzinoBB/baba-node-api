@@ -58,23 +58,25 @@ async def main() -> None:
         token_std = comp.get("tokenStandard")
         print(f"[compile] ok — classes={[b['name'] for b in bco]} tokenStandard={token_std}")
 
+        max_fee = "1"  # ~5x the expected 0.18 CS deploy fee, owner has 98 CS
+
         print("[pack] packing deploy tx ...")
         pack = await call(s, "smartcontract_pack", {
             "PublicKey": pk,
             "operation": "deploy",
             "sourceCode": src,
             "byteCodeObjects": bco,
-            "feeAsString": "0",
+            "feeAsString": max_fee,
             "UserData": "",
         })
         if not pack.get("success"):
             sys.exit(f"pack failed: {pack}")
         dr = pack["dataResponse"]
-        inner_id = dr["transactionInnerId"]
+        inner_id = pack["transactionInnerId"]
         pkg = dr["transactionPackagedStr"]
-        deployed_addr = dr.get("deployedAddress")
+        deployed_addr = pack.get("contractAddress") or dr.get("contractAddress")
         rec_fee = dr.get("recommendedFee")
-        print(f"[pack] inner_id={inner_id} deployedAddress={deployed_addr} recommendedFee={rec_fee}")
+        print(f"[pack] inner_id={inner_id} contractAddress={deployed_addr} recommendedFee={rec_fee}")
 
         sig = sign_packaged(pkg, sk)
         print("[sign] ok")
@@ -86,14 +88,15 @@ async def main() -> None:
             "byteCodeObjects": bco,
             "TransactionSignature": sig,
             "transactionInnerId": inner_id,
-            "feeAsString": "0",
+            "feeAsString": max_fee,
             "UserData": "",
         })
         if not dep.get("success"):
             sys.exit(f"deploy failed: {dep}")
         tx_id = dep.get("transactionId")
         fee = dep.get("actualFee")
-        print(f"[deploy] OK — txId={tx_id} actualFee={fee} addr={dep.get('deployedAddress')}")
+        addr_from_dep = dep.get("contractAddress") or (dep.get("dataResponse") or {}).get("contractAddress")
+        print(f"[deploy] OK — txId={tx_id} actualFee={fee} addr={addr_from_dep}")
 
         print("[wait] waiting next block ...")
         await call(s, "monitor_wait_for_block", {"timeoutMs": 30000})
@@ -101,7 +104,7 @@ async def main() -> None:
         info = await call(s, "transaction_get_info", {"transactionId": tx_id})
         print(f"[confirm] status={info.get('status')} found={info.get('found')}")
 
-        addr = dep.get("deployedAddress") or deployed_addr
+        addr = addr_from_dep or deployed_addr
         tinfo = await call(s, "tokens_info", {"token": addr})
         print(f"[tokens_info] {json.dumps(tinfo, indent=2)}")
 
