@@ -49,11 +49,12 @@ def _config() -> tuple[str, dict[str, str]]:
 async def open_session():
     url, headers = _config()
 
+    verify = os.environ.get("EBB_MCP_TLS_VERIFY", "1") not in ("0", "false", "no")
+
     def _factory(headers=None, timeout=None, auth=None):
-        # cert self-signed su IP: verify=False
         return httpx.AsyncClient(
             headers=headers, timeout=timeout, auth=auth,
-            verify=False, follow_redirects=True,
+            verify=verify, follow_redirects=True,
         )
 
     async with sse_client(url, headers=headers, httpx_client_factory=_factory) as (read, write):
