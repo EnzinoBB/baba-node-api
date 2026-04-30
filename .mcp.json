@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "baba-credits": {
+      "type": "sse",
+      "url": "http://38.242.234.47:7000/sse"
+    }
+  }
+}
